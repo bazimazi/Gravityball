@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#09080f" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="description" content="You do not move the ball. You turn gravity." />
+    <title>Gravityball</title>
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="view" aria-label="Gravityball playfield"></canvas>
+      <div id="hud">
+        <button id="btn-pause" type="button" aria-label="Pause">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5h2.2v14H8zM13.8 5H16v14h-2.2z" fill="currentColor"/></svg>
+        </button>
+        <button id="btn-restart" type="button" aria-label="Restart chamber">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5a7 7 0 1 1-6.3 4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 4.5V9h4.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+        </button>
+        <p id="banner"></p>
+        <p id="hintline"></p>
+      </div>
+      <div id="sheet" hidden></div>
+      <div id="toasts"></div>
+      <div id="sr" class="sr-only" aria-live="polite"></div>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
