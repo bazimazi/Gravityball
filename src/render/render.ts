@@ -1086,9 +1086,9 @@ function paintMotes(ctx: CanvasRenderingContext2D, cam: Camera, level: LevelDef,
         ctx.fill();
         continue;
       }
-      const color = style === 'grav-ember' ? '#e0a15a' : m.color;
-      const stretch = (style === 'grav-filament' ? 5 : 1.6) * Math.min(1, sp / 2) * cam.scale * 0.12 + 0.5;
-      ctx.globalAlpha = (style === 'grav-ember' ? 0.5 : 0.32) * env;
+      const color = style === 'grav-ember' ? '#e0a15a' : style === 'grav-aurora' ? '#8fd6c0' : m.color;
+      const stretch = (style === 'grav-filament' ? 5 : style === 'grav-aurora' ? 3.4 : 1.6) * Math.min(1, sp / 2) * cam.scale * 0.12 + 0.5;
+      ctx.globalAlpha = (style === 'grav-ember' ? 0.5 : style === 'grav-aurora' ? 0.44 : 0.32) * env;
       ctx.strokeStyle = color;
       ctx.lineWidth = m.size * (style === 'grav-filament' ? 0.7 : 1);
       const nx = sp > 1e-3 ? m.vx / sp : 0;
@@ -1143,8 +1143,8 @@ function paintTrail(ctx: CanvasRenderingContext2D, cam: Camera, level: LevelDef,
   const pts = trail.map((p) => worldToScreen(cam, p.x, p.y, level.h));
   const n = pts.length;
   const ballR = 0.32 * cam.scale;
-  const width = style === 'trail-ribbon' ? ballR * 1.6 : style === 'trail-ion' ? 1.6 : style === 'trail-thread' ? ballR * 0.5 : ballR * 0.9;
-  const color = style === 'trail-ember' ? '#e07a6a' : world.accent;
+  const width = style === 'trail-ribbon' ? ballR * 1.6 : style === 'trail-comet' ? ballR * 1.3 : style === 'trail-ion' ? 1.6 : style === 'trail-thread' ? ballR * 0.5 : ballR * 0.9;
+  const color = style === 'trail-ember' ? '#e07a6a' : style === 'trail-comet' ? '#eec766' : world.accent;
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   ctx.lineCap = 'round';
@@ -1153,8 +1153,10 @@ function paintTrail(ctx: CanvasRenderingContext2D, cam: Camera, level: LevelDef,
   // Tapered ribbon: each segment thinner and fainter toward the tail.
   for (let i = 1; i < n; i++) {
     const u = i / (n - 1);
-    ctx.globalAlpha = Math.pow(u, 1.4) * (style === 'trail-ribbon' ? 0.55 : 0.45);
+    ctx.globalAlpha = Math.pow(u, 1.4) * (style === 'trail-ribbon' || style === 'trail-comet' ? 0.55 : 0.45);
     ctx.lineWidth = Math.max(0.6, width * u);
+    // Prism walks the hue wheel along the line, and slowly over time.
+    if (style === 'trail-prism') ctx.strokeStyle = `hsl(${(i * 14 + now * 90) % 360}, 72%, 74%)`;
     let [x0, y0] = pts[i - 1];
     let [x1, y1] = pts[i];
     if (style === 'trail-ion') {
@@ -1169,8 +1171,8 @@ function paintTrail(ctx: CanvasRenderingContext2D, cam: Camera, level: LevelDef,
     ctx.lineTo(x1, y1);
     ctx.stroke();
   }
-  if (style === 'trail-ember' || style === 'trail-dust') {
-    ctx.fillStyle = style === 'trail-ember' ? '#f0a070' : world.accent2;
+  if (style === 'trail-ember' || style === 'trail-dust' || style === 'trail-comet') {
+    ctx.fillStyle = style === 'trail-ember' ? '#f0a070' : style === 'trail-comet' ? '#fff3c8' : world.accent2;
     for (let i = 0; i < n; i += 2) {
       const [x, y] = pts[i];
       const u = i / n;
@@ -1290,6 +1292,18 @@ function paintBall(ctx: CanvasRenderingContext2D, cam: Camera, level: LevelDef, 
       ctx.moveTo(-r, r * 0.1);
       ctx.lineTo(-r * 0.2, -r);
       ctx.stroke();
+    } else if (skin === 'ball-axis') {
+      ctx.strokeStyle = 'rgba(58,52,80,0.55)';
+      ctx.lineWidth = Math.max(1, r * 0.1);
+      ctx.beginPath();
+      ctx.moveTo(-r, 0);
+      ctx.lineTo(r, 0);
+      ctx.moveTo(0, -r);
+      ctx.lineTo(0, r);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.28, 0, Math.PI * 2);
+      ctx.stroke();
     } else if (skin === 'ball-ancient') {
       ctx.strokeStyle = 'rgba(80,60,40,0.45)';
       ctx.lineWidth = 1;
@@ -1326,6 +1340,9 @@ export function ballColors(skin: string, world: WorldDef): [string, string, stri
   if (skin === 'ball-planet') return ['#f6e2cf', '#e0a15a', '#6a3a28'];
   if (skin === 'ball-plasma') return ['#fff6ea', '#e07a6a', '#6a2430'];
   if (skin === 'ball-ancient') return ['#f3ead6', '#cbb892', '#6d5b45'];
+  if (skin === 'ball-aurora') return ['#f4fff8', '#8fd6c0', '#2f5a6a'];
+  if (skin === 'ball-gilded') return ['#fff8e0', '#eec766', '#6a4a18'];
+  if (skin === 'ball-axis') return ['#ffffff', '#f4f0ff', '#3a3450'];
   return ['#ffffff', world.accent2, '#4a5264'];
 }
 

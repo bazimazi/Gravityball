@@ -23,16 +23,29 @@ import {
   levelRecord,
   levelUnlocked,
   loadSave,
+  medalRank,
   modeUnlocked,
-  unlockedBalls,
   worldUnlocked,
   writeSave,
   type SaveData,
   type Settings,
 } from '../save/save';
-import { grant, grantsForClear } from '../save/achievements';
+import { ACHIEVEMENTS, grant, settle } from '../save/achievements';
+import {
+  bumpStreak,
+  dayKey,
+  describeReward,
+  insight,
+  insightSources,
+  liveStreak,
+  rankOf,
+  rankTitle,
+  SEAL_GEMS,
+  sealLevel,
+  worldSeal,
+} from '../save/progress';
 import { dailyLevel, endlessLevel, freshRelics, rollOffers, sandboxLevel, type Offer } from './modes';
-import { UI, type SheetModel } from '../ui/ui';
+import { UI, type ProgressModel, type RankModel, type SheetModel } from '../ui/ui';
 
 type Mode = 'campaign' | 'endless' | 'daily' | 'run' | 'sandbox' | 'challenge';
 type Phase = 'play' | 'clear' | 'pause' | 'map' | 'settings' | 'wardrobe' | 'mastery' | 'codex' | 'replay' | 'pick' | 'over';
@@ -121,6 +134,9 @@ export class Game {
   private pendingOver = false;
   private overText = '';
   private overScore = '';
+  /** Insight before and after the last result, for the bar on result screens. */
+  private xpFrom = 0;
+  private xpTo = 0;
   private log: { e: string }[] = [];
 
   constructor() {
@@ -163,12 +179,27 @@ export class Game {
     const level = getLevel(id);
     if (level && levelUnlocked(this.save, id)) this.playLevel(level, level.challenge ? 'challenge' : 'campaign');
     else this.playLevel(mustLevel('1-1'), 'campaign');
+    this.xpFrom = this.xpTo = insight(this.save);
+    this.settle();
     requestAnimationFrame(this.frame);
   }
 
   private track(e: string): void {
     this.log.push({ e });
     if (this.log.length > 120) this.log.shift();
+  }
+
+  /** Grants due marks and rewards, announces them, and saves. */
+  private settle(extra: string[] = []): void {
+    const done = settle(this.save);
+    const lines = [...extra, ...done.marks.map((a) => a.name), ...done.rewards];
+    if (lines.length > 3) {
+      // A burst (usually an older save catching up) reads better as one line.
+      this.ui.toast(lines.slice(0, 2).join(' · '));
+      this.ui.toast(`+${lines.length - 2} more${done.gems ? ` · +${done.gems} fragments` : ''}`);
+    } else for (const line of lines) this.ui.toast(line);
+    if (done.rewards.length) this.audio.fragment();
+    writeSave(this.save);
   }
 
   private frame = (t: number): void => {
@@ -288,8 +319,12 @@ export class Game {
     const n = this.fxCount(Math.round(4 + k * 10));
     const style = this.save.impact;
     if (style === 'impact-prism') this.particles.burst(x, y, nx, ny, n, ['#e07a6a', '#f0d78c', '#9eb7d8'], 3 + k * 5, 1.8);
+    else if (style === 'impact-nova') this.particles.burst(x, y, nx, ny, n + 2, ['#fff3c8', '#eec766', '#f3efe4'], 4 + k * 6, 2.2);
     else this.particles.burst(x, y, nx, ny, n, '#f3efe4', 3 + k * 5, 1.6);
-    if (style === 'impact-ring' || k > 0.6) this.particles.ring(x, y, worldById(this.sim.level.world || 1).accent2, 14 + k * 18, 0.35);
+    if (style === 'impact-nova') {
+      this.particles.ring(x, y, '#eec766', 18 + k * 22, 0.4);
+      if (k > 0.3) this.particles.glow(x, y, '#fff3c8', 20 + k * 24, 0.3);
+    } else if (style === 'impact-ring' || k > 0.6) this.particles.ring(x, y, worldById(this.sim.level.world || 1).accent2, 14 + k * 18, 0.35);
   }
 
   private startWave(): void {
@@ -305,11 +340,7 @@ export class Game {
     this.save.found.push(frag.id);
     this.save.currency += 1;
     this.ui.toast(frag.line);
-    if (this.save.found.length >= 6) {
-      const a = grant(this.save, 'collected');
-      if (a) this.ui.toast(a.name);
-    }
-    writeSave(this.save);
+    this.settle();
   }
 
   private onDie(): void {
@@ -323,6 +354,7 @@ export class Game {
     this.addTrauma(0.5);
     buzz(16, this.save.settings.haptics);
     this.save.stats.deaths += 1;
+    this.settle();
     this.track('fail');
     if (this.mode === 'endless' || this.mode === 'run') {
       this.hitstop = 0.7;
@@ -354,6 +386,7 @@ export class Game {
   private onWin(): void {
     this.audio.win();
     buzz(12, this.save.settings.haptics);
+    if (this.mode !== 'endless' && this.mode !== 'run') this.xpFrom = insight(this.save);
     this.winInputs = this.sim.inputs.map((e) => ({ ...e }));
     this.winTick = this.sim.tick;
     this.winMedal = bestMedal(this.sim.stats, this.sim.level.medals);
@@ -361,27 +394,25 @@ export class Game {
     if (this.mode === 'endless') {
       this.endlessScore += this.scoreChunk();
       this.endlessRoom += 1;
-      if (this.endlessRoom === 10) {
-        const a = grant(this.save, 'endless-10');
-        if (a) this.ui.toast(a.name);
-      }
-      this.ui.toast(`Room ${this.endlessRoom} · ${this.endlessScore}`);
+      this.save.stats.rooms += 1;
+      this.save.stats.bestEndlessRooms = Math.max(this.save.stats.bestEndlessRooms, this.endlessRoom);
+      this.settle([`Room ${this.endlessRoom} · ${this.endlessScore}`]);
       this.startWinAnim(0.5, () => this.playLevel(endlessLevel(this.endlessSeed, this.endlessRoom), 'endless', this.relics));
       return;
     }
     if (this.mode === 'run') {
       this.runScore += this.scoreChunk();
       this.runRoom += 1;
-      if (this.runRoom === 5) {
-        const a = grant(this.save, 'run-5');
-        if (a) this.ui.toast(a.name);
-      }
+      this.save.stats.rooms += 1;
+      this.save.stats.bestRunRooms = Math.max(this.save.stats.bestRunRooms, this.runRoom);
+      this.settle();
       this.offers = rollOffers(this.runSeed, this.runRoom, this.relics);
       this.startWinAnim(0.55, () => this.open('pick'));
       return;
     }
     if (this.mode === 'daily') this.recordDaily();
     if (this.mode === 'campaign' || this.mode === 'challenge') this.recordCampaign();
+    this.xpTo = insight(this.save);
     this.startWinAnim(0.8, () => this.open('clear'));
   }
 
@@ -429,15 +460,16 @@ export class Game {
     const stats = this.sim.stats;
     const rec = levelRecord(this.save, level.id);
     const first = rec.clears === 0;
+    const upgraded = !first && medalRank(this.winMedal) > medalRank(rec.medal);
     rec.clears += 1;
     rec.medal = betterMedal(rec.medal, this.winMedal);
-    this.recordLine = first ? 'First clear' : '';
+    this.recordLine = first ? 'First clear' : upgraded ? `${medalWord(this.winMedal)} earned` : '';
     if (rec.bestTime == null || stats.time < rec.bestTime) {
-      if (!first) this.recordLine = 'New best time';
+      if (!first && !upgraded) this.recordLine = 'New best time';
       rec.bestTime = stats.time;
       rec.bestRot = stats.rotations;
       rec.ghost = this.winInputs.slice();
-    } else this.recordLine = `Best ${rec.bestTime.toFixed(2)}s`;
+    } else if (!upgraded) this.recordLine = `Best ${rec.bestTime.toFixed(2)}s`;
     this.save.levels[level.id] = rec;
     this.save.stats.clears += 1;
     this.save.stats.rotations += stats.rotations;
@@ -447,13 +479,12 @@ export class Game {
       this.save.currency += 1;
       this.save.stats.perfects = countPerfects(this.save);
     }
-    for (const a of grantsForClear(this.save, {
-      world: level.world,
-      rotations: stats.rotations,
-      medal: this.winMedal,
-      firstClear: first,
-    })) this.ui.toast(a.name);
-    writeSave(this.save);
+    const now: string[] = [];
+    if (stats.rotations === 0) {
+      const a = grant(this.save, 'no-rotation');
+      if (a) now.push(a.name);
+    }
+    this.settle(now);
   }
 
   private recordDaily(): void {
@@ -461,10 +492,13 @@ export class Game {
     const time = this.sim.stats.time;
     if (!prev || time < prev.time) this.save.daily[this.dailyDate] = { time, medal: this.winMedal };
     this.recordLine = !prev ? 'Today’s first clear' : time < prev.time ? 'New best today' : `Today’s best ${prev.time.toFixed(2)}s`;
-    if (!prev) this.save.currency += 1;
-    const a = grant(this.save, 'daily');
-    if (a) this.ui.toast(a.name);
-    writeSave(this.save);
+    const extra: string[] = [];
+    if (!prev) {
+      this.save.currency += 1;
+      bumpStreak(this.save, this.dailyDate);
+      if (this.save.streak.count > 1) extra.push(`Streak ${this.save.streak.count}`);
+    }
+    this.settle(extra);
   }
 
   private finishRun(): void {
@@ -474,7 +508,8 @@ export class Game {
     this.save.currency += earned;
     if (this.mode === 'endless' && score > this.save.stats.bestEndless) this.save.stats.bestEndless = score;
     if (this.mode === 'run' && score > this.save.stats.bestRun) this.save.stats.bestRun = score;
-    writeSave(this.save);
+    this.settle();
+    this.xpTo = insight(this.save);
     this.overText = 'The line broke.';
     this.overScore = `${score} points · ${rooms} rooms · ${earned} fragments`;
     this.open('over');
@@ -597,12 +632,9 @@ export class Game {
       return false;
     }
     if (res !== 'ok') return false;
-    if (this.sim.stats.rotations === 1) {
+    if (this.sim.stats.rotations === 1 && !this.save.achievements.includes('first-shift')) {
       const a = grant(this.save, 'first-shift');
-      if (a) {
-        this.ui.toast(a.name);
-        writeSave(this.save);
-      }
+      this.settle(a ? [a.name] : []);
     }
     this.arrowTarget += kind === 'cw' ? -Math.PI / 2 : Math.PI / 2;
     const [gx, gy] = dirVector(this.sim.gravityDir);
@@ -855,8 +887,7 @@ export class Game {
   }
 
   private startDaily(): void {
-    const d = new Date();
-    this.dailyDate = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    this.dailyDate = dayKey(new Date());
     const built = dailyLevel(this.dailyDate);
     this.dailyLabel = built.label;
     this.playLevel(built.level, 'daily');
@@ -864,6 +895,7 @@ export class Game {
   }
 
   private startEndless(): void {
+    this.xpFrom = insight(this.save);
     this.endlessSeed = (Math.random() * 1e9) >>> 0;
     this.endlessRoom = 0;
     this.endlessScore = 0;
@@ -871,6 +903,7 @@ export class Game {
   }
 
   private startRun(): void {
+    this.xpFrom = insight(this.save);
     this.runSeed = (Math.random() * 1e9) >>> 0;
     this.runRoom = 0;
     this.runScore = 0;
@@ -908,6 +941,10 @@ export class Game {
     const c = COSMETICS.find((x) => x.id === id);
     if (!c) return;
     if (!this.save.unlockedCosmetics.includes(id)) {
+      if (c.unlock) {
+        this.ui.toast(this.lookRequirement(c.unlock));
+        return;
+      }
       if (this.save.currency < c.cost) {
         this.ui.toast('Not enough fragments');
         return;
@@ -919,8 +956,14 @@ export class Game {
     if (c.slot === 'trail') this.save.trail = id;
     if (c.slot === 'impact') this.save.impact = id;
     if (c.slot === 'gravity') this.save.gravityFx = id;
-    writeSave(this.save);
+    this.settle();
     this.open('wardrobe');
+  }
+
+  private lookRequirement(u: { rank?: number; mark?: string }): string {
+    if (u.rank) return `Rank ${u.rank}`;
+    const mark = ACHIEVEMENTS.find((a) => a.id === u.mark);
+    return mark ? `Mark: ${mark.name}` : 'Earned';
   }
 
   private copyShare(): void {
@@ -981,19 +1024,104 @@ export class Game {
       share: '',
       modes: [
         { id: 'daily', name: 'Daily', text: modeUnlocked(this.save, 'daily') ? this.dailyBlurb() : 'Clear one chamber', on: modeUnlocked(this.save, 'daily') },
-        { id: 'endless', name: 'Endless', text: modeUnlocked(this.save, 'endless') ? `Best ${this.save.stats.bestEndless}` : 'Finish Awakening', on: modeUnlocked(this.save, 'endless') },
-        { id: 'run', name: 'Gravity Run', text: modeUnlocked(this.save, 'run') ? `Best ${this.save.stats.bestRun}` : 'Reach Rotation', on: modeUnlocked(this.save, 'run') },
+        { id: 'endless', name: 'Endless', text: modeUnlocked(this.save, 'endless') ? `Best ${this.save.stats.bestEndless} · ${this.save.stats.bestEndlessRooms} rooms` : 'Finish Awakening', on: modeUnlocked(this.save, 'endless') },
+        { id: 'run', name: 'Gravity Run', text: modeUnlocked(this.save, 'run') ? `Best ${this.save.stats.bestRun} · ${this.save.stats.bestRunRooms} rooms` : 'Reach Rotation', on: modeUnlocked(this.save, 'run') },
         { id: 'sandbox', name: 'Sandbox', text: modeUnlocked(this.save, 'sandbox') ? 'A live chamber' : 'Reach Machines', on: modeUnlocked(this.save, 'sandbox') },
       ],
-      mastery: this.masteryBlocks(),
+      rank: this.rankModel(),
+      progress: this.progressModel(),
+      marks: ACHIEVEMENTS.map((a) => {
+        const have = this.save.achievements.includes(a.id);
+        const [cur, max] = a.progress?.(this.save) ?? [undefined, undefined];
+        return { name: a.name, text: a.text, have, cur, max };
+      }),
+      nudge: this.phase === 'clear' && (this.mode === 'campaign' || this.mode === 'challenge') ? this.sealNudge(level.world) : null,
+      looks: Object.fromEntries(COSMETICS.filter((c) => c.unlock).map((c) => [c.id, this.lookRequirement(c.unlock!)])),
+    };
+  }
+
+  private rankModel(): RankModel {
+    const result = this.phase === 'clear' || this.phase === 'over';
+    const after = rankOf(result ? this.xpTo : insight(this.save));
+    const before = rankOf(result ? this.xpFrom : after.xp);
+    const up = after.rank > before.rank;
+    return {
+      rank: after.rank,
+      title: after.title,
+      xp: after.xp,
+      floor: after.floor,
+      next: after.next,
+      from: up ? 0 : before.frac,
+      to: after.frac,
+      gain: Math.max(0, after.xp - before.xp),
+      up,
+      nextReward: describeReward(after.rank + 1),
+    };
+  }
+
+  /** The closest world seal still open in this world, if the player is near it. */
+  private sealNudge(world: number): SheetModel['nudge'] {
+    const w = WORLDS.find((x) => x.id === world);
+    if (!w) return null;
+    const seal = worldSeal(this.save, world);
+    if (seal.cleared < seal.total) return null;
+    const lvl = sealLevel(seal);
+    if (lvl === 0) return { world: w.name, tier: 'gold', have: seal.gold, total: seal.total, gems: SEAL_GEMS.gold };
+    if (lvl === 1) return { world: w.name, tier: 'perfect', have: seal.perfect, total: seal.total, gems: SEAL_GEMS.perfect };
+    return null;
+  }
+
+  private progressModel(): ProgressModel {
+    const s = this.save;
+    const { rank } = rankOf(insight(s));
+    const road: ProgressModel['road'] = [];
+    // The next few ranks, plus every rank that carries a look, so the road shows what is coming.
+    const lookRanks = COSMETICS.map((c) => c.unlock?.rank).filter((r): r is number => !!r);
+    const shown = new Set<number>([...lookRanks, rank + 1, rank + 2, rank + 3]);
+    for (const r of [...shown].sort((a, b) => a - b)) {
+      if (r < 2) continue;
+      road.push({ rank: r, title: rankTitle(r), text: describeReward(r), state: r <= rank ? 'done' : r === rank + 1 ? 'next' : 'far' });
+    }
+    const seals = WORLDS.filter((w) => worldUnlocked(s, w.id)).map((w) => {
+      const seal = worldSeal(s, w.id);
+      return { id: w.id, name: w.name, accent: w.accent, total: seal.total, cleared: seal.cleared, gold: seal.gold, perfect: seal.perfect, level: sealLevel(seal) };
+    });
+    const close = ACHIEVEMENTS
+      .filter((a) => a.progress && !s.achievements.includes(a.id))
+      .map((a) => {
+        const [cur, max] = a.progress!(s);
+        return { name: a.name, text: a.text, have: false, cur, max, u: cur / max };
+      })
+      .filter((a) => a.cur > 0)
+      .sort((a, b) => b.u - a.u)
+      .slice(0, 4);
+    const today = dayKey(new Date());
+    const medals = Object.values(s.levels).filter((l) => l.medal).length;
+    return {
+      road,
+      seals,
+      close,
+      record: [
+        { label: 'chambers', value: `${medals}` },
+        { label: 'perfect', value: `${countPerfects(s)}` },
+        { label: 'clears', value: `${s.stats.clears}` },
+        { label: 'breaks', value: `${s.stats.deaths}` },
+        { label: 'turns', value: `${s.stats.rotations}` },
+        { label: 'streak', value: `${liveStreak(s, today)}` },
+        { label: 'best streak', value: `${s.streak.best}` },
+        { label: 'endless', value: `${s.stats.bestEndless}` },
+        { label: 'run', value: `${s.stats.bestRun}` },
+      ],
+      sources: insightSources(s),
     };
   }
 
   private dailyBlurb(): string {
-    const d = new Date();
-    const key = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const key = dayKey(new Date());
     const best = this.save.daily[key];
-    return best ? `Today ${best.time.toFixed(2)}s` : 'One shared chamber';
+    const streak = liveStreak(this.save, key);
+    const tail = streak > 1 ? ` · streak ${streak}` : '';
+    return best ? `Today ${best.time.toFixed(2)}s${tail}` : streak > 0 ? `Keep your ${streak}-day streak` : 'One shared chamber';
   }
 
   private mapWorlds(): SheetModel['worlds'] {
@@ -1022,18 +1150,10 @@ export class Game {
         unlocked,
         done,
         total: mains.length,
+        seal: unlocked ? sealLevel(worldSeal(this.save, w.id)) : 0,
         levels: unlocked ? levels : [],
       };
     });
-  }
-
-  private masteryBlocks(): { title: string; lines: string[] }[] {
-    return [
-      { title: 'Understanding', lines: ['Replays keep the line you just drew.', 'A ghost of your best can stand in the room.', 'The dots ahead of the ball are a glance, not an answer.'] },
-      { title: 'Exploration', lines: [`${this.save.found.length} fragments in the codex.`, modeUnlocked(this.save, 'endless') ? 'Endless is open.' : 'Endless opens after Awakening.', modeUnlocked(this.save, 'sandbox') ? 'The sandbox is open.' : 'The sandbox opens in Machines.'] },
-      { title: 'Experimentation', lines: [`Challenge balls: ${unlockedBalls(this.save).join(', ')}.`, 'Relics live in Gravity Run. They stay out of the campaign.'] },
-      { title: 'Mastery', lines: [`${countPerfects(this.save)} perfect chambers.`, `Best endless ${this.save.stats.bestEndless}. Best run ${this.save.stats.bestRun}.`] },
-    ];
   }
 }
 
@@ -1058,10 +1178,6 @@ function wrapAngle(d: number): number {
   while (d > Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
   return d;
-}
-
-function pad(n: number): string {
-  return `${n}`.padStart(2, '0');
 }
 
 function buzz(ms: number, scale: number): void {

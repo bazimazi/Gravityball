@@ -1,7 +1,6 @@
 import type { MedalTier } from '../core/types';
 import type { Settings } from '../save/save';
 import { COSMETICS, type Cosmetic } from '../save/save';
-import { ACHIEVEMENTS } from '../save/achievements';
 
 export interface MapNode {
   id: string;
@@ -23,7 +22,47 @@ export interface MapWorld {
   unlocked: boolean;
   done: number;
   total: number;
+  /** 0 none, 1 gold seal, 2 perfect seal. */
+  seal: 0 | 1 | 2;
   levels: MapNode[];
+}
+
+export interface RankModel {
+  rank: number;
+  title: string;
+  xp: number;
+  floor: number;
+  next: number;
+  /** Bar fill before and after the last result, 0..1. */
+  from: number;
+  to: number;
+  gain: number;
+  up: boolean;
+  nextReward: string;
+}
+
+export interface MarkModel {
+  name: string;
+  text: string;
+  have: boolean;
+  cur?: number;
+  max?: number;
+}
+
+export interface ProgressModel {
+  road: { rank: number; title: string; text: string; state: 'done' | 'next' | 'far' }[];
+  seals: { id: number; name: string; accent: string; total: number; cleared: number; gold: number; perfect: number; level: 0 | 1 | 2 }[];
+  close: MarkModel[];
+  record: { label: string; value: string }[];
+  sources: { label: string; value: number }[];
+}
+
+export interface SealNudge {
+  world: string;
+  tier: 'gold' | 'perfect';
+  have: number;
+  total: number;
+  gems: number;
 }
 
 export interface SheetModel {
@@ -55,7 +94,12 @@ export interface SheetModel {
   overScore: string;
   share: string;
   modes: { id: string; name: string; text: string; on: boolean }[];
-  mastery: { title: string; lines: string[] }[];
+  rank: RankModel;
+  progress: ProgressModel;
+  marks: MarkModel[];
+  nudge: SealNudge | null;
+  /** Unlock line for each earned look, e.g. "Rank 6". */
+  looks: Record<string, string>;
 }
 
 export interface Hooks {
@@ -270,6 +314,8 @@ export class UI {
         </div>`).join('')}
       </div>
       ${unmet.length ? `<ul class="goals">${unmet.map((l) => `<li><i class="dot ${l.tier}"></i><span><strong>${esc(l.tier)}</strong> ${esc(l.text)}</span></li>`).join('')}</ul>` : ''}
+      ${xpBlock(m.rank)}
+      ${m.nudge ? nudge(m.nudge) : ''}
       ${m.nextText ? `<p class="next-world">${esc(m.nextText)}</p>` : ''}
       <div class="row">
         <button class="ghost" type="button" data-act="retry">${icon('retry')}Retry</button>
@@ -295,7 +341,7 @@ export class UI {
         <button type="button" data-act="map">${icon('map')}<span>Map</span></button>
         <button type="button" data-act="settings">${icon('gear')}<span>Settings</span></button>
         <button type="button" data-act="wardrobe">${icon('brush')}<span>Looks</span></button>
-        <button type="button" data-act="mastery">${icon('peak')}<span>Mastery</span></button>
+        <button type="button" data-act="mastery">${icon('peak')}<span>Progress</span></button>
         <button type="button" data-act="codex">${icon('book')}<span>Codex</span></button>
       </div>`;
   }
@@ -324,7 +370,7 @@ export class UI {
             <h2>${esc(w.name)}</h2>
             <p>${esc(w.unlocked ? w.subtitle : 'Further in')}</p>
           </div>
-          <span class="world-count">${w.unlocked ? `${w.done}/${w.total}` : icon('lock')}</span>
+          <span class="world-count">${w.unlocked ? `${seals(w.seal)}${w.done}/${w.total}` : icon('lock')}</span>
         </header>
         <div class="bar"><i style="width:${pct}%"></i></div>
         ${w.unlocked ? `<p class="thought">${esc(w.thought)}</p><div class="nodes">${nodes}</div>` : ''}
@@ -340,13 +386,14 @@ export class UI {
           <span>${icon('gem')}${m.currency}</span>
           <span>${icon('book')}${m.found.filter((f) => f.have).length}/${m.found.length}</span>
         </div>
+        ${rankCard(m.rank)}
       </div>
       <div class="modes">${modes}</div>
       <div class="links">
         <button type="button" data-act="resume">${icon('back')}Back to chamber</button>
         <button type="button" data-act="settings">${icon('gear')}Settings</button>
         <button type="button" data-act="wardrobe">${icon('brush')}Looks</button>
-        <button type="button" data-act="mastery">${icon('peak')}Mastery</button>
+        <button type="button" data-act="mastery">${icon('peak')}Progress</button>
         <button type="button" data-act="codex">${icon('book')}Codex</button>
       </div>
       ${worlds}`;
@@ -389,8 +436,11 @@ export class UI {
       const cards = COSMETICS.filter((c) => c.slot === slot).map((c) => {
         const owned = m.unlockedCosmetics.includes(c.id);
         const on = worn(c);
-        const afford = owned || m.currency >= c.cost;
-        const tag = owned ? (on ? `${icon('check')}Worn` : 'Wear') : `${icon('gem')}${c.cost}`;
+        const earned = !!c.unlock;
+        const afford = owned || (!earned && m.currency >= c.cost);
+        const tag = owned
+          ? (on ? `${icon('check')}Worn` : 'Wear')
+          : earned ? `${icon('lock')}${esc(m.looks[c.id] ?? '')}` : `${icon('gem')}${c.cost}`;
         return `<button class="card ${on ? 'on' : ''} ${owned ? '' : 'shop'} ${afford ? '' : 'poor'}" type="button" data-equip="${esc(c.id)}">
           <span class="swatch ${esc(c.slot)}" style="${swatch(c.id)}"></span>
           <strong>${esc(c.name)}</strong>
@@ -408,23 +458,50 @@ export class UI {
   }
 
   private mastery(m: SheetModel): string {
-    const blocks = m.mastery.map((b, i) => `
-      <section class="world plain" style="--wa:var(--accent)">
-        <header><span class="world-num">${i + 1}</span><div class="world-title"><h2>${esc(b.title)}</h2></div></header>
-        ${b.lines.map((l) => `<p>${esc(l)}</p>`).join('')}
-      </section>`).join('');
-    return `${backBar('Mastery')}<h2>What you can see.</h2>${blocks}`;
+    const r = m.rank;
+    const p = m.progress;
+    const road = p.road.map((step) => `
+      <li class="${step.state}">
+        <span class="road-rank">${step.state === 'done' ? icon('check') : step.rank}</span>
+        <span><strong>Rank ${step.rank} · ${esc(step.title)}</strong><small>${esc(step.text)}</small></span>
+      </li>`).join('');
+    const sealRows = p.seals.map((w) => `
+      <div class="seal-row" style="--wa:${w.accent}">
+        <span class="seal-name">${esc(w.name)}</span>
+        <span class="seal-bars">${meter(w.cleared, w.total, 'clear')}${meter(w.gold, w.total, 'gold')}${meter(w.perfect, w.total, 'perfect')}</span>
+        ${seals(w.level, true)}
+      </div>`).join('');
+    const close = p.close.map((c) => markCard(c)).join('');
+    const record = p.record.map((x) => `<div class="stat"><b>${esc(x.value)}</b><span>${esc(x.label)}</span></div>`).join('');
+    const sources = p.sources.filter((x) => x.value > 0).map((x) => `<li><span>${esc(x.label)}</span><b>${x.value}</b></li>`).join('');
+    return `
+      ${backBar('Progress')}
+      <div class="rank-hero">
+        <span class="rank-big">${r.rank}</span>
+        <div>
+          <p class="kicker">Rank</p>
+          <h2>${esc(r.title)}</h2>
+          <p class="lede">${r.xp} insight · ${r.next - r.xp} to rank ${r.rank + 1}</p>
+        </div>
+      </div>
+      <div class="xp-track"><i style="--from:0;--to:${r.to}"></i></div>
+      <p class="xp-next">${icon('next')}<span>Rank ${r.rank + 1}: ${esc(r.nextReward)}</span></p>
+      <section class="group"><p class="kicker">Rank road</p><ul class="road">${road}</ul>
+        <p class="fine">Every rank gives a fragment. Every fifth gives three.</p></section>
+      ${sealRows ? `<section class="group"><p class="kicker">World seals</p>
+        <p class="fine">Gold on every chamber of a world: +2. Perfect on every one: +3.</p>${sealRows}</section>` : ''}
+      ${close ? `<section class="group"><p class="kicker">Within reach</p><div class="marks">${close}</div></section>` : ''}
+      <section class="group"><p class="kicker">Record</p><div class="record-grid">${record}</div></section>
+      ${sources ? `<section class="group"><p class="kicker">Where insight comes from</p><ul class="sources">${sources}</ul></section>` : ''}`;
   }
 
   private codex(m: SheetModel): string {
     const lines = m.found.map((f) => f.have
       ? `<p class="codex-line">${icon('gem')}<span>${esc(f.line)}</span></p>`
       : `<p class="codex-line lost">${icon('lock')}<span>· · ·</span></p>`).join('');
-    const earned = ACHIEVEMENTS.map((a) => {
-      const have = m.achievements.includes(a.id);
-      return `<div class="mark ${have ? 'on' : ''}">${icon(have ? 'medal' : 'lock')}<span><strong>${esc(have ? a.name : '???')}</strong><small>${esc(have ? a.text : 'Not yet.')}</small></span></div>`;
-    }).join('');
-    return `${backBar('Codex')}<h2>Fragments</h2><div class="group">${lines || '<p>Nothing yet.</p>'}</div><h2>Marks</h2><div class="marks">${earned}</div>`;
+    const earned = m.marks.map((a) => markCard(a)).join('');
+    const have = m.marks.filter((a) => a.have).length;
+    return `${backBar('Codex')}<h2>Fragments</h2><div class="group">${lines || '<p>Nothing yet.</p>'}</div><h2>Marks <small class="count">${have}/${m.marks.length}</small></h2><div class="marks">${earned}</div>`;
   }
 
   private pick(m: SheetModel): string {
@@ -446,6 +523,7 @@ export class UI {
         <div class="stat big"><b data-count="${Number.isFinite(score) ? score : 0}">0</b><span>points</span></div>
       </div>
       <p class="statline">${esc(rest)}</p>
+      ${xpBlock(m.rank)}
       <div class="row">
         <button class="action" type="button" data-act="retry">${icon('retry')}Again</button>
         <button class="ghost" type="button" data-act="map">${icon('map')}Map</button>
@@ -537,6 +615,50 @@ function check(key: string, label: string, value: boolean): string {
   return `<label class="setting"><span>${label}</span><input class="switch" data-set="${key}" type="checkbox" ${value ? 'checked' : ''} /></label>`;
 }
 
+function xpBlock(r: RankModel): string {
+  const from = r.up ? 0 : r.from;
+  return `
+    <div class="xp ${r.up ? 'up' : ''}">
+      <div class="xp-head">
+        <span class="xp-rank">${r.rank}</span>
+        <span class="xp-title">${r.up ? '<strong>Rank up</strong> · ' : ''}${esc(r.title)}</span>
+        ${r.gain > 0 ? `<span class="xp-gain">+<b data-count="${r.gain}">0</b> insight</span>` : ''}
+      </div>
+      <div class="xp-track"><i style="--from:${from};--to:${r.to}"></i></div>
+    </div>`;
+}
+
+function rankCard(r: RankModel): string {
+  return `
+    <button class="rank-card" type="button" data-act="mastery">
+      <span class="xp-rank">${r.rank}</span>
+      <span class="rank-text"><strong>${esc(r.title)}</strong><small>${r.next - r.xp} insight to rank ${r.rank + 1} · ${esc(r.nextReward)}</small></span>
+      <span class="xp-track"><i style="--from:0;--to:${r.to}"></i></span>
+    </button>`;
+}
+
+function nudge(n: SealNudge): string {
+  return `<p class="nudge"><i class="seal ${n.tier} on"></i><span>${esc(n.world)} ${n.tier} seal · <b>${n.have}/${n.total}</b> · +${n.gems}</span></p>`;
+}
+
+function seals(level: 0 | 1 | 2, always = false): string {
+  if (!level && !always) return '';
+  const label = ['No seal yet', 'Gold seal', 'Perfect seal'][level];
+  return `<span class="seals" role="img" aria-label="${label}"><i class="seal gold ${level >= 1 ? 'on' : ''}"></i><i class="seal perfect ${level >= 2 ? 'on' : ''}"></i></span>`;
+}
+
+function meter(have: number, total: number, tier: string): string {
+  const pct = total ? Math.round((have / total) * 100) : 0;
+  return `<span class="meter ${tier}" title="${tier} ${have}/${total}"><i style="width:${pct}%"></i></span>`;
+}
+
+function markCard(a: MarkModel): string {
+  const prog = !a.have && a.max
+    ? `<span class="mini"><i style="width:${Math.round(((a.cur ?? 0) / a.max) * 100)}%"></i></span><em>${a.cur ?? 0}/${a.max}</em>`
+    : '';
+  return `<div class="mark ${a.have ? 'on' : ''}">${icon(a.have ? 'medal' : 'lock')}<span><strong>${esc(a.name)}</strong><small>${esc(a.text)}</small>${prog}</span></div>`;
+}
+
 function emblem(tier: MedalTier): string {
   const rays = Array.from({ length: 12 }, (_, i) => `<line x1="60" y1="8" x2="60" y2="20" transform="rotate(${i * 30} 60 60)" />`).join('');
   const pips = tier === 'bronze' ? 1 : tier === 'silver' ? 2 : tier === 'gold' ? 3 : 4;
@@ -569,6 +691,9 @@ function swatch(id: string): string {
     'ball-plasma': 'radial-gradient(circle at 35% 30%, #fff6ea, #e07a6a 55%, #6a2430)',
     'ball-ancient': 'radial-gradient(circle at 35% 30%, #f3ead6, #cbb892 55%, #6d5b45)',
     'ball-geo': 'conic-gradient(from 150deg, #fff8e6, #c8b890, #fff8e6)',
+    'ball-aurora': 'radial-gradient(circle at 35% 30%, #f4fff8, #8fd6c0 55%, #2f5a6a)',
+    'ball-gilded': 'radial-gradient(circle at 35% 30%, #fff8e0, #eec766 55%, #6a4a18)',
+    'ball-axis': 'radial-gradient(circle at 35% 30%, #ffffff, #f4f0ff 50%, #3a3450)',
   };
   const lines: Record<string, string> = {
     'trail-thread': 'linear-gradient(90deg, transparent, #e6d3b1)',
@@ -576,6 +701,10 @@ function swatch(id: string): string {
     'trail-ribbon': 'linear-gradient(90deg, transparent, #e6d3b1)',
     'trail-ember': 'linear-gradient(90deg, transparent, #e07a6a, #f0a070)',
     'trail-ion': 'repeating-linear-gradient(90deg, #9eb7d8 0 3px, transparent 3px 6px)',
+    'trail-comet': 'linear-gradient(90deg, transparent, #eec766, #fff3c8)',
+    'trail-prism': 'linear-gradient(90deg, #e07a6a, #f0d78c, #8fd6c0, #9eb7d8, #d7c4f2)',
+    'impact-nova': 'radial-gradient(circle, #fff3c8 12%, #eec766 30%, transparent 60%)',
+    'grav-aurora': 'repeating-linear-gradient(180deg, rgba(143,214,192,.7) 0 6px, transparent 6px 10px)',
     'impact-mote': 'radial-gradient(circle, #f3efe4 2px, transparent 3px) 0 0/10px 10px',
     'impact-ring': 'radial-gradient(circle, transparent 40%, #9eb7d8 44%, #9eb7d8 52%, transparent 56%)',
     'impact-prism': 'conic-gradient(#e07a6a, #f0d78c, #9eb7d8, #e07a6a)',

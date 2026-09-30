@@ -27,6 +27,8 @@ export interface Cosmetic {
   name: string;
   cost: number;
   note: string;
+  /** Earned, never bought: a rank reached or a mark held. */
+  unlock?: { rank?: number; mark?: string };
 }
 
 export const COSMETICS: Cosmetic[] = [
@@ -38,18 +40,25 @@ export const COSMETICS: Cosmetic[] = [
   { id: 'ball-plasma', slot: 'ball', name: 'Plasma', cost: 5, note: 'Soft fire, no heat.' },
   { id: 'ball-ancient', slot: 'ball', name: 'Ancient', cost: 3, note: 'Stone that remembers.' },
   { id: 'ball-geo', slot: 'ball', name: 'Geometric', cost: 2, note: 'A perfect disagreement with curves.' },
+  { id: 'ball-aurora', slot: 'ball', name: 'Aurora', cost: 0, note: 'Cold light, turning.', unlock: { rank: 6 } },
+  { id: 'ball-gilded', slot: 'ball', name: 'Gilded', cost: 0, note: 'Every chamber of a world, in gold.', unlock: { mark: 'gold-world' } },
+  { id: 'ball-axis', slot: 'ball', name: 'Axis', cost: 0, note: 'The still point everything turns around.', unlock: { rank: 15 } },
   { id: 'trail-thread', slot: 'trail', name: 'Thread', cost: 0, note: 'A thin memory of the line.' },
   { id: 'trail-dust', slot: 'trail', name: 'Dust', cost: 2, note: 'What the air keeps.' },
   { id: 'trail-ribbon', slot: 'trail', name: 'Ribbon', cost: 3, note: 'A wider path.' },
   { id: 'trail-ember', slot: 'trail', name: 'Ember', cost: 3, note: 'Warm, brief.' },
   { id: 'trail-ion', slot: 'trail', name: 'Ion', cost: 4, note: 'Broken light.' },
+  { id: 'trail-comet', slot: 'trail', name: 'Comet', cost: 0, note: 'A tail you earned.', unlock: { rank: 3 } },
+  { id: 'trail-prism', slot: 'trail', name: 'Prism', cost: 0, note: 'Every color the line was.', unlock: { mark: 'perfect-world' } },
   { id: 'impact-mote', slot: 'impact', name: 'Mote', cost: 0, note: 'A small answer.' },
   { id: 'impact-ring', slot: 'impact', name: 'Ring', cost: 2, note: 'A circle left behind.' },
   { id: 'impact-prism', slot: 'impact', name: 'Prism', cost: 3, note: 'The hit splits.' },
+  { id: 'impact-nova', slot: 'impact', name: 'Nova', cost: 0, note: 'Every landing, a small sun.', unlock: { rank: 12 } },
   { id: 'grav-drift', slot: 'gravity', name: 'Drift', cost: 0, note: 'Dust follows the pull.' },
   { id: 'grav-filament', slot: 'gravity', name: 'Filaments', cost: 3, note: 'Long strokes.' },
   { id: 'grav-spore', slot: 'gravity', name: 'Spores', cost: 2, note: 'Slow seeds.' },
   { id: 'grav-ember', slot: 'gravity', name: 'Embers', cost: 3, note: 'The pull runs warm.' },
+  { id: 'grav-aurora', slot: 'gravity', name: 'Aurora', cost: 0, note: 'The pull, lit green.', unlock: { rank: 9 } },
 ];
 
 export interface SaveData {
@@ -67,15 +76,28 @@ export interface SaveData {
   seenThoughts: string[];
   lastLevel: string;
   awardedPerfect: string[];
-  stats: {
-    clears: number;
-    deaths: number;
-    rotations: number;
-    perfects: number;
-    bestEndless: number;
-    bestRun: number;
-  };
+  /** One-time reward keys: rank-N, seal-W-gold, seal-W-perfect. */
+  claimed: string[];
+  stats: SaveStats;
   daily: Record<string, { time: number; medal: MedalTier }>;
+  streak: { last: string; count: number; best: number };
+}
+
+export interface SaveStats {
+  clears: number;
+  deaths: number;
+  rotations: number;
+  perfects: number;
+  bestEndless: number;
+  bestRun: number;
+  /** Endless and Gravity Run rooms cleared, all time. */
+  rooms: number;
+  bestEndlessRooms: number;
+  bestRunRooms: number;
+}
+
+export function defaultStats(): SaveStats {
+  return { clears: 0, deaths: 0, rotations: 0, perfects: 0, bestEndless: 0, bestRun: 0, rooms: 0, bestEndlessRooms: 0, bestRunRooms: 0 };
 }
 
 const KEY = 'gravityball-save-v1';
@@ -111,8 +133,10 @@ export function defaultSave(): SaveData {
     seenThoughts: [],
     lastLevel: '1-1',
     awardedPerfect: [],
-    stats: { clears: 0, deaths: 0, rotations: 0, perfects: 0, bestEndless: 0, bestRun: 0 },
+    claimed: [],
+    stats: defaultStats(),
     daily: {},
+    streak: { last: '', count: 0, best: 0 },
   };
 }
 
@@ -122,7 +146,15 @@ export function loadSave(): SaveData {
     if (!raw) return defaultSave();
     const parsed = JSON.parse(raw) as SaveData;
     if (parsed.v !== 1) return defaultSave();
-    return { ...defaultSave(), ...parsed, settings: { ...defaultSettings(), ...parsed.settings } };
+    const base = defaultSave();
+    // Nested records merge too, so fields added later start at their defaults.
+    return {
+      ...base,
+      ...parsed,
+      settings: { ...base.settings, ...parsed.settings },
+      stats: { ...base.stats, ...parsed.stats },
+      streak: { ...base.streak, ...parsed.streak },
+    };
   } catch {
     return defaultSave();
   }
